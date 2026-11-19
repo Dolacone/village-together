@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Village Together</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main id="login" class="gate" hidden>
+      <h1>Village Together</h1>
+      <p>大家一起把村莊蓋起來。</p>
+      <div id="google-button"></div>
+      <p id="login-msg" class="muted"></p>
+    </main>
+
+    <main id="naming" class="gate" hidden>
+      <h1>建立角色</h1>
+      <form id="name-form">
+        <label for="name-input">角色名稱</label>
+        <input id="name-input" maxlength="16" autocomplete="off" required />
+        <button type="submit">進入世界</button>
+      </form>
+    </main>
+
+    <main id="game" hidden>
+      <header id="status" class="panel"></header>
+      <section id="map-panel" class="panel">
+        <canvas id="map" width="160" height="160"></canvas>
+        <div id="dpad"></div>
+      </section>
+      <section id="tile-panel" class="panel"></section>
+      <section id="self-panel" class="panel"></section>
+      <section id="chat-panel" class="panel">
+        <h2>世界頻道</h2>
+        <div id="chat-log"></div>
+        <form id="chat-form">
+          <input id="chat-input" maxlength="200" autocomplete="off" placeholder="輸入訊息" />
+          <button type="submit">送出</button>
+        </form>
+      </section>
+    </main>
+
+    <div id="toast" hidden></div>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

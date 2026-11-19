@@ -3,9 +3,10 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
+import { WebSocket } from 'ws';
 import { SPAWN } from '../shared/data.ts';
 import type { ClientMsg, ServerMsg } from '../shared/protocol.ts';
-import { CLOSE_AUTH, startServer } from '../server/app.ts';
+import { CLOSE_AUTH, IDENTITY_HEADER, startServer } from '../server/app.ts';
 import type { RunningServer } from '../server/app.ts';
 
 type State = Extract<ServerMsg, { t: 'state' }>;
@@ -14,13 +15,7 @@ const dir = mkdtempSync(join(tmpdir(), 'village-'));
 const dbPath = join(dir, 'world.db');
 let server: RunningServer;
 
-// Stands in for Google: the credential "token:<sub>" belongs to the account <sub>.
-const verifier = async (credential: string) => {
-  if (!credential.startsWith('token:')) throw new Error('invalid token');
-  return credential.slice('token:'.length);
-};
-
-const boot = () => startServer({ port: 0, dbPath, clientId: 'test-client', verifier, staticDir: dir, seed: 42 });
+const boot = () => startServer({ port: 0, dbPath, staticDir: dir, seed: 42 });
 
 before(async () => {
   server = await boot();
@@ -31,28 +26,21 @@ after(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function login(sub: string): Promise<string> {
-  const res = await fetch(`http://localhost:${server.port}/api/login`, {
-    method: 'POST',
-    body: JSON.stringify({ credential: `token:${sub}` }),
-  });
-  assert.equal(res.status, 200);
-  return ((await res.json()) as { session: string }).session;
-}
-
+// A connection as the proxy delivers it: the identity header carries the player's email.
 class Client {
   ws: WebSocket;
   inbox: ServerMsg[] = [];
   waiting: (() => void)[] = [];
   closed: Promise<number>;
 
-  constructor(session: string) {
-    this.ws = new WebSocket(`ws://localhost:${server.port}/ws?session=${session}`);
-    this.ws.addEventListener('message', (e) => {
-      this.inbox.push(JSON.parse(String(e.data)));
+  constructor(email: string | null) {
+    const headers = email === null ? {} : { [IDENTITY_HEADER]: email };
+    this.ws = new WebSocket(`ws://localhost:${server.port}/ws`, { headers });
+    this.ws.on('message', (data) => {
+      this.inbox.push(JSON.parse(String(data)));
       for (const wake of this.waiting.splice(0)) wake();
     });
-    this.closed = new Promise((done) => this.ws.addEventListener('close', (e) => done(e.code)));
+    this.closed = new Promise((done) => this.ws.on('close', (code) => done(code)));
   }
 
   // Resolves with the first unread message that matches, dropping the ones before it.
@@ -85,8 +73,8 @@ class Client {
   }
 }
 
-async function enter(sub: string, name: string): Promise<Client> {
-  const client = new Client(await login(sub));
+async function enter(email: string, name: string): Promise<Client> {
+  const client = new Client(email);
   await client.next((m) => m.t === 'needName');
   client.send({ t: 'create', name });
   await client.state();
@@ -94,27 +82,14 @@ async function enter(sub: string, name: string): Promise<Client> {
 }
 
 // REQ-003 條件 1
-test('an invalid Google credential gets no session', async () => {
-  const res = await fetch(`http://localhost:${server.port}/api/login`, {
-    method: 'POST',
-    body: JSON.stringify({ credential: 'forged' }),
-  });
-  assert.equal(res.status, 401);
-});
-
-test('a connection without a known session is closed', async () => {
-  const client = new Client('not-a-session');
+test('a connection without the identity from the proxy is closed', async () => {
+  const client = new Client(null);
   assert.equal(await client.closed, CLOSE_AUTH);
 });
 
-test('the page learns the Google client id from the server', async () => {
-  const res = await fetch(`http://localhost:${server.port}/api/config`);
-  assert.deepEqual(await res.json(), { googleClientId: 'test-client' });
-});
-
 // REQ-003 條件 2, 3, 4
-test('the first login names a character at the spawn point and later logins return to it', async () => {
-  const first = new Client(await login('acct-return'));
+test('the first visit with an email names a character at the spawn point and later visits return to it', async () => {
+  const first = new Client('rita@example.com');
   await first.next((m) => m.t === 'needName');
   first.send({ t: 'create', name: 'Rita' });
   const spawned = await first.state();
@@ -126,7 +101,7 @@ test('the first login names a character at the spawn point and later logins retu
   await server.close();
   server = await boot();
 
-  const again = new Client(await login('acct-return'));
+  const again = new Client('rita@example.com');
   const back = await again.state();
   assert.deepEqual([back.me.name, back.me.x, back.me.y], ['Rita', SPAWN.x, SPAWN.y - 1]);
   await again.close();
@@ -134,8 +109,8 @@ test('the first login names a character at the spawn point and later logins retu
 
 // REQ-001 條件 1, REQ-002 條件 5, REQ-003 條件 4
 test('a player sees another player arrive, act, and go offline in real time', async () => {
-  const ann = await enter('acct-ann', 'Ann');
-  const bob = await enter('acct-bob', 'Bob');
+  const ann = await enter('ann@example.com', 'Ann');
+  const bob = await enter('bob@example.com', 'Bob');
   await ann.state((s) => s.here.players.some((p) => p.name === 'Bob' && p.online));
 
   bob.send({ t: 'move', dir: 'e' });
@@ -153,7 +128,7 @@ test('a player sees another player arrive, act, and go offline in real time', as
 });
 
 test('a rule violation is reported to the player who caused it', async () => {
-  const eve = await enter('acct-eve', 'Eve');
+  const eve = await enter('eve@example.com', 'Eve');
   eve.send({ t: 'gather' });
   const err = await eve.next((m) => m.t === 'error');
   assert.equal(err.t === 'error' && err.msg, '這一格沒有可採集的資源');
@@ -162,8 +137,8 @@ test('a rule violation is reported to the player who caused it', async () => {
 
 // REQ-006 條件 1
 test('a chat message reaches every online player with the sender name and coordinates', async () => {
-  const cat = await enter('acct-cat', 'Cat');
-  const dan = await enter('acct-dan', 'Dan');
+  const cat = await enter('cat@example.com', 'Cat');
+  const dan = await enter('dan@example.com', 'Dan');
   for (let i = 0; i < 3; i++) dan.send({ t: 'move', dir: 's' });
   await dan.state((s) => s.me.y === SPAWN.y + 3);
 

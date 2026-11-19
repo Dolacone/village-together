@@ -7,7 +7,6 @@ import { extname, join, normalize, resolve } from 'node:path';
 import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
 import type { ClientMsg, ServerMsg } from '../shared/protocol.ts';
-import type { Verifier } from './auth.ts';
 import { Db } from './db.ts';
 import { generateMap } from './mapgen.ts';
 import { GameError, World, tileKey } from './world.ts';
@@ -15,8 +14,6 @@ import { GameError, World, tileKey } from './world.ts';
 export type ServerOptions = {
   port: number;
   dbPath: string;
-  clientId: string;
-  verifier: Verifier;
   staticDir: string;
   // Used when the database holds no world yet.
   seed?: number;
@@ -34,27 +31,12 @@ const CONTENT_TYPES: Record<string, string> = {
   '.ico': 'image/x-icon',
 };
 
-// WebSocket close code telling the client its session is unknown.
+// Set by the authenticating proxy in front of the game. The game trusts it as the account identity.
+export const IDENTITY_HEADER = 'x-auth-request-email';
+// WebSocket close code telling the client the request carried no identity.
 export const CLOSE_AUTH = 4401;
 const STATE_PUSH_MS = 60_000;
-const MAX_BODY = 16_384;
 const MAX_CHAT = 200;
-
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify(body));
-}
-
-async function readJson(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > MAX_BODY) throw new Error('body too large');
-    chunks.push(chunk);
-  }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
-}
 
 export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const now = opts.now ?? Date.now;
@@ -87,40 +69,19 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     }
     try {
       const body = await readFile(file);
-      res.writeHead(200, {
-        'content-type': CONTENT_TYPES[extname(file)] ?? 'application/octet-stream',
-        // Google Identity Services requires this policy on http://localhost.
-        'referrer-policy': 'no-referrer-when-downgrade',
-      });
+      res.writeHead(200, { 'content-type': CONTENT_TYPES[extname(file)] ?? 'application/octet-stream' });
       res.end(body);
     } catch {
       res.writeHead(404).end('not found');
     }
   };
 
-  const server = createServer(async (req, res) => {
-    const { pathname } = new URL(req.url ?? '/', 'http://localhost');
-    try {
-      if (req.method === 'GET' && pathname === '/api/config') {
-        sendJson(res, 200, { googleClientId: opts.clientId });
-      } else if (req.method === 'POST' && pathname === '/api/login') {
-        const body = (await readJson(req)) as { credential?: unknown };
-        let sub: string;
-        try {
-          sub = await opts.verifier(String(body.credential ?? ''));
-        } catch {
-          sendJson(res, 401, { error: 'Google 登入驗證失敗' });
-          return;
-        }
-        sendJson(res, 200, { session: db.createSession(sub) });
-      } else if (req.method === 'GET') {
-        await serveStatic(pathname, res);
-      } else {
-        res.writeHead(405).end();
-      }
-    } catch {
-      if (!res.headersSent) sendJson(res, 400, { error: 'bad request' });
+  const server = createServer((req, res) => {
+    if (req.method !== 'GET') {
+      res.writeHead(405).end();
+      return;
     }
+    void serveStatic(new URL(req.url ?? '/', 'http://localhost').pathname, res);
   });
 
   const wss = new WebSocketServer({ noServer: true });
@@ -134,13 +95,13 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   });
 
   wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-    const session = new URL(req.url ?? '/', 'http://localhost').searchParams.get('session') ?? '';
-    const sub = db.subForSession(session);
-    if (!sub) {
-      ws.close(CLOSE_AUTH, 'unknown session');
+    const header = req.headers[IDENTITY_HEADER];
+    const email = typeof header === 'string' ? header.trim() : '';
+    if (!email) {
+      ws.close(CLOSE_AUTH, 'no identity');
       return;
     }
-    let playerId = db.playerIdForSub(sub);
+    let playerId = db.playerIdFor(email);
 
     const here = (id: string): string[] => {
       const p = world.players.get(id);
@@ -163,13 +124,13 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
         if (!msg || typeof msg !== 'object') throw new SyntaxError('not an object');
         if (!playerId) {
           if (msg.t !== 'create') return;
-          const existing = db.playerIdForSub(sub);
+          const existing = db.playerIdFor(email);
           if (existing) {
             playerId = existing;
           } else {
             const id = randomUUID();
             world.createPlayer(id, msg.name);
-            db.linkSub(sub, id);
+            db.link(email, id);
             playerId = id;
           }
           join(playerId);

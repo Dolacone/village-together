@@ -4,16 +4,17 @@ A cooperative browser MMO prototype. Behaviour is specified in `requirements/`, 
 
 ## Run
 
-1. In Google Cloud Console, create an OAuth 2.0 Client ID of type "Web application".
-   - Add `http://localhost` and `http://localhost:8080` to "Authorized JavaScript origins".
-2. Copy `.env.example` to `.env` and set `GOOGLE_CLIENT_ID`.
-3. Start the game:
+The game must run behind a reverse proxy that performs the Google login and sets the `X-Auth-Request-Email` request header, for example Caddy `forward_auth` with oauth2-proxy.
 
-   ```sh
-   docker compose up --build -d
-   ```
+- The game trusts that header as the player's identity.
+- The proxy must remove a client-supplied copy of the header.
+- Only the proxy may reach the game's port.
 
-4. Open `http://localhost:8080`.
+```sh
+docker compose up --build -d
+```
+
+The game listens on `127.0.0.1:8080`. Point the proxy at it.
 
 The world is stored in the `world` Docker volume. `docker compose down -v` deletes it.
 
@@ -25,5 +26,5 @@ Requires Node.js 24.
 npm install
 npm test
 npm run typecheck
-npm run build && GOOGLE_CLIENT_ID=<id> npm start
+npm run build && npm start
 ```

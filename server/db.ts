@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import type { Player, Tile } from '../shared/protocol.ts';
 import { tileKey } from './world.ts';
@@ -8,8 +7,7 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS tiles (key TEXT PRIMARY KEY, data TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS players (id TEXT PRIMARY KEY, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS accounts (sub TEXT PRIMARY KEY, player_id TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, sub TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS accounts (email TEXT PRIMARY KEY, player_id TEXT NOT NULL);
 `;
 
 export class Db implements Store {
@@ -55,24 +53,13 @@ export class Db implements Store {
       .run(player.id, JSON.stringify(player));
   }
 
-  playerIdForSub(sub: string): string | undefined {
-    const row = this.db.prepare('SELECT player_id FROM accounts WHERE sub = ?').get(sub);
+  playerIdFor(email: string): string | undefined {
+    const row = this.db.prepare('SELECT player_id FROM accounts WHERE email = ?').get(email);
     return row ? String(row.player_id) : undefined;
   }
 
-  linkSub(sub: string, playerId: string): void {
-    this.db.prepare('INSERT INTO accounts (sub, player_id) VALUES (?, ?)').run(sub, playerId);
-  }
-
-  createSession(sub: string): string {
-    const token = randomBytes(32).toString('hex');
-    this.db.prepare('INSERT INTO sessions (token, sub) VALUES (?, ?)').run(token, sub);
-    return token;
-  }
-
-  subForSession(token: string): string | undefined {
-    const row = this.db.prepare('SELECT sub FROM sessions WHERE token = ?').get(token);
-    return row ? String(row.sub) : undefined;
+  link(email: string, playerId: string): void {
+    this.db.prepare('INSERT INTO accounts (email, player_id) VALUES (?, ?)').run(email, playerId);
   }
 
   close(): void {

@@ -26,16 +26,6 @@ import { TILE, drawMap } from './sprites.ts';
 
 type State = Extract<ServerMsg, { t: 'state' }>;
 
-declare const google: {
-  accounts: {
-    id: {
-      initialize(options: { client_id: string; callback: (response: { credential: string }) => void }): void;
-      renderButton(parent: HTMLElement, options: Record<string, string>): void;
-    };
-  };
-};
-
-const SESSION_KEY = 'village-session';
 // Matches CLOSE_AUTH in server/app.ts.
 const CLOSE_AUTH = 4401;
 const RECONNECT_MS = 2000;
@@ -56,25 +46,8 @@ function esc(text: string): string {
   return text.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
-function loadSession(): string | null {
-  try {
-    return localStorage.getItem(SESSION_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function saveSession(session: string | null): void {
-  try {
-    if (session) localStorage.setItem(SESSION_KEY, session);
-    else localStorage.removeItem(SESSION_KEY);
-  } catch {
-    // The session then lasts until the page closes.
-  }
-}
-
-function show(screen: 'login' | 'naming' | 'game'): void {
-  for (const id of ['login', 'naming', 'game']) $(id).hidden = id !== screen;
+function show(screen: 'notice' | 'naming' | 'game'): void {
+  for (const id of ['notice', 'naming', 'game']) $(id).hidden = id !== screen;
 }
 
 function toast(text: string): void {
@@ -94,67 +67,21 @@ function act(msg: ClientMsg): string {
   return `data-act="${esc(JSON.stringify(msg))}"`;
 }
 
-// --- login ---
-
-function loadScript(src: string): Promise<void> {
-  return new Promise((done, fail) => {
-    const el = document.createElement('script');
-    el.src = src;
-    el.onload = () => done();
-    el.onerror = () => fail(new Error(`cannot load ${src}`));
-    document.head.append(el);
-  });
-}
-
-let loginReady = false;
-
-async function showLogin(): Promise<void> {
-  show('login');
-  if (loginReady) return;
-  const msg = $('login-msg');
-  try {
-    const { googleClientId } = (await (await fetch('/api/config')).json()) as { googleClientId: string };
-    if (!googleClientId) {
-      msg.textContent = '伺服器尚未設定 GOOGLE_CLIENT_ID。';
-      return;
-    }
-    await loadScript('https://accounts.google.com/gsi/client');
-    google.accounts.id.initialize({
-      client_id: googleClientId,
-      callback: async ({ credential }) => {
-        const res = await fetch('/api/login', { method: 'POST', body: JSON.stringify({ credential }) });
-        if (!res.ok) {
-          msg.textContent = 'Google 登入驗證失敗，請再試一次。';
-          return;
-        }
-        const { session } = (await res.json()) as { session: string };
-        saveSession(session);
-        connect(session);
-      },
-    });
-    google.accounts.id.renderButton($('google-button'), { theme: 'filled_blue', size: 'large', shape: 'rectangular' });
-    loginReady = true;
-  } catch {
-    msg.textContent = '無法載入 Google 登入，請確認網路連線後重新整理。';
-  }
-}
-
 // --- connection ---
 
-function connect(session: string): void {
+// The proxy in front of the game attaches the player's identity to the connection.
+function connect(): void {
   const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-  const socket = new WebSocket(`${scheme}://${location.host}/ws?session=${encodeURIComponent(session)}`);
+  const socket = new WebSocket(`${scheme}://${location.host}/ws`);
   ws = socket;
   socket.onmessage = (e) => handle(JSON.parse(String(e.data)) as ServerMsg);
   socket.onclose = (e) => {
-    if (ws !== socket) return;
     if (e.code === CLOSE_AUTH) {
-      saveSession(null);
-      void showLogin();
+      show('notice');
       return;
     }
     toast('連線中斷，重新連線中');
-    setTimeout(() => connect(session), RECONNECT_MS);
+    setTimeout(connect, RECONNECT_MS);
   };
 }
 
@@ -429,6 +356,4 @@ $('chat-form').addEventListener('submit', (e) => {
 window.addEventListener('resize', () => state && renderMap(state));
 setInterval(() => state && renderStatus(state), 1000);
 
-const session = loadSession();
-if (session) connect(session);
-else void showLogin();
+connect();

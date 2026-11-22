@@ -20,6 +20,12 @@ The world is stored in the `world` Docker volume. `docker compose down -v` delet
 
 A world created by version 0.1 cannot be loaded by version 0.2. Delete the volume before starting 0.2.
 
+## Versions
+
+- A patch version (0.2.x) is a tuning change.
+- A minor version (0.x.0) is a larger change that comes with a document describing it, such as a feature list.
+- Each release is a branch named after its version, for example `v0.2.1`.
+
 ## Develop
 
 Requires Node.js 24.

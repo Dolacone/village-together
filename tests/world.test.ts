@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { AP_CAP, BUILDINGS, DAY, MINUTE, TERRAIN_IDS } from '../shared/data.ts';
 import type { AnimalId, BuildingId, ItemId, Terrain } from '../shared/data.ts';
-import type { ClientMsg, Player, Pos, ServerMsg } from '../shared/protocol.ts';
+import type { ClientMsg, Player, Pos, ServerMsg, Tile } from '../shared/protocol.ts';
 import { addItems, countOf, percent, structureDur } from '../shared/rules.ts';
 import { GameError, World, tileKey } from '../server/world.ts';
 
 const SIZE = 21;
+const START = 1_000_000_000;
 const SPAWN = { x: 10, y: 10 };
 const NORTH = { x: 10, y: 9 };
 const FOREST = { x: 11, y: 10 };
@@ -16,8 +17,8 @@ const PEAK = { x: 12, y: 12 };
 const COAST = { x: 8, y: 12 };
 
 // A grass map with one forest east of the spawn point, one mountain south of it, and one river west of it.
-function setup() {
-  const clock = { now: 1_000_000_000 };
+function setup(stored: Tile[] = []) {
+  const clock = { now: START };
   const cells = new Uint8Array(SIZE * SIZE);
   const put = (pos: Pos, terrain: Terrain) => (cells[pos.y * SIZE + pos.x] = TERRAIN_IDS.indexOf(terrain));
   put(FOREST, 'forest');
@@ -27,7 +28,7 @@ function setup() {
   put(COAST, 'coast');
   const animals = new Map<string, AnimalId>();
   const store = { saveTile: () => {}, savePlayer: () => {} };
-  const world = new World({ size: SIZE, cells, spawn: SPAWN }, [], [], store, () => clock.now, {
+  const world = new World({ size: SIZE, cells, spawn: SPAWN }, stored, [], store, () => clock.now, {
     wildlife: (x, y) => animals.get(tileKey(x, y)) ?? null,
   });
   const a = world.createPlayer('a', 'Ann');
@@ -107,18 +108,18 @@ test('an action takes real time, shows its state, and gives its result when the 
 test('a character carries out one action at a time', () => {
   const { a, act, refuses, stand } = setup();
   stand(a, FOREST);
-  act('a', { t: 'gather', rounds: 1 });
-  refuses('a', { t: 'gather', rounds: 1 });
+  act('a', { t: 'gather', item: 'wood', rounds: 1 });
+  refuses('a', { t: 'gather', item: 'wood', rounds: 1 });
   refuses('a', { t: 'move', ...SPAWN });
 });
 
 // REQ-003 條件 6
 test('gathering several rounds is one action that hands out everything at its end', () => {
-  const { a, act, pass, state, stand } = setup();
+  const { world, a, act, pass, state, stand } = setup();
   stand(a, FOREST);
-  act('a', { t: 'gather', rounds: 3 });
+  act('a', { t: 'gather', item: 'wood', rounds: 3 });
   assert.equal(state('a').me.action?.rounds, 3);
-  assert.equal(state('a').here.stock?.amount, 97);
+  assert.equal(world.tile(FOREST.x, FOREST.y).stocks.wood?.amount, 97);
   pass(29 * MINUTE);
   assert.equal(countOf(a.inv, 'wood'), 0);
   pass(1 * MINUTE);
@@ -130,12 +131,12 @@ test('gathering several rounds is one action that hands out everything at its en
 test('gathering is limited by the stock of the tile', () => {
   const { world, a, act, refuses, state, stand } = setup();
   stand(a, FOREST);
-  world.tile(FOREST.x, FOREST.y).stock = { amount: 2, at: 1_000_000_000 };
-  act('a', { t: 'gather', rounds: 5 });
+  world.tile(FOREST.x, FOREST.y).stocks.wood = { amount: 2, at: START };
+  act('a', { t: 'gather', item: 'wood', rounds: 5 });
   assert.equal(state('a').me.action?.rounds, 2);
-  act('a', { t: 'cancel' });
-  stand(a, SPAWN);
-  refuses('a', { t: 'gather', rounds: 1 });
+  act('a', { t: 'speed', ap: 20 });
+  refuses('a', { t: 'gather', item: 'wood', rounds: 1 });
+  refuses('a', { t: 'gather', item: 'hide' as 'wood', rounds: 1 });
 });
 
 test('crafting takes the materials of all rounds at its start', () => {
@@ -167,7 +168,7 @@ test('products that do not fit the backpack stay on the ground of the tile', () 
   const { a, act, pass, state, grant, stand } = setup();
   stand(a, FOREST);
   grant(a, 'wood', 49);
-  act('a', { t: 'gather', rounds: 3 });
+  act('a', { t: 'gather', item: 'wood', rounds: 3 });
   pass(30 * MINUTE);
   assert.equal(countOf(a.inv, 'wood'), 50);
   assert.equal(state('a').here.ground.wood?.qty, 2);
@@ -186,13 +187,13 @@ test('stopping a move leaves the character on the tile it has reached', () => {
 });
 
 test('stopping a gathering gives the finished rounds and returns the rest to the tile', () => {
-  const { a, act, pass, state, stand } = setup();
+  const { world, a, act, pass, stand } = setup();
   stand(a, FOREST);
-  act('a', { t: 'gather', rounds: 5 });
+  act('a', { t: 'gather', item: 'wood', rounds: 5 });
   pass(25 * MINUTE);
   act('a', { t: 'cancel' });
   assert.equal(countOf(a.inv, 'wood'), 2);
-  assert.equal(state('a').here.stock?.amount, 98);
+  assert.equal(world.tile(FOREST.x, FOREST.y).stocks.wood?.amount, 98);
   assert.equal(a.prof.chop, 20);
 });
 
@@ -233,7 +234,7 @@ test('AP accumulates 1.5 per minute while idle and 1 per minute during an action
   a.apAt = clock.now;
   pass(60 * MINUTE);
   assert.equal(state('a').me.ap, 190);
-  act('a', { t: 'gather', rounds: 6 });
+  act('a', { t: 'gather', item: 'wood', rounds: 6 });
   pass(60 * MINUTE);
   assert.equal(state('a').me.ap, 250);
   pass(10 * MINUTE);
@@ -245,7 +246,7 @@ test('AP is the same whether the action end is noticed at once or later', () => 
   stand(a, FOREST);
   a.ap = 100;
   a.apAt = clock.now;
-  act('a', { t: 'gather', rounds: 2 });
+  act('a', { t: 'gather', item: 'wood', rounds: 2 });
   pass(60 * MINUTE);
   assert.equal(state('a').me.ap, 100 + 20 + 60);
 });
@@ -264,7 +265,7 @@ test('each AP spent shortens the action in progress by one minute', () => {
   stand(a, FOREST);
   a.ap = 100;
   a.apAt = clock.now;
-  act('a', { t: 'gather', rounds: 3 });
+  act('a', { t: 'gather', item: 'wood', rounds: 3 });
   act('a', { t: 'speed', ap: 10 });
   assert.equal(a.ap, 90);
   assert.equal(left('a'), 20);
@@ -276,7 +277,7 @@ test('spending AP equal to the minutes left finishes the action at once', () => 
   stand(a, FOREST);
   a.ap = 100;
   a.apAt = clock.now;
-  act('a', { t: 'gather', rounds: 3 });
+  act('a', { t: 'gather', item: 'wood', rounds: 3 });
   pass(5 * MINUTE);
   act('a', { t: 'speed', ap: 25 });
   assert.equal(a.ap, 80);
@@ -289,7 +290,7 @@ test('speeding up never costs more AP than the minutes left', () => {
   stand(a, FOREST);
   a.ap = 100;
   a.apAt = clock.now;
-  act('a', { t: 'gather', rounds: 1 });
+  act('a', { t: 'gather', item: 'wood', rounds: 1 });
   act('a', { t: 'speed', ap: 500 });
   assert.equal(a.ap, 90);
   assert.equal(countOf(a.inv, 'wood'), 1);
@@ -301,7 +302,7 @@ test('speeding up needs the AP and an action in progress', () => {
   refuses('a', { t: 'speed', ap: 1 });
   a.ap = 5;
   a.apAt = clock.now;
-  act('a', { t: 'gather', rounds: 1 });
+  act('a', { t: 'gather', item: 'wood', rounds: 1 });
   refuses('a', { t: 'speed', ap: 10 });
   assert.equal(a.ap, 5);
   assert.equal(left('a'), 10);
@@ -364,7 +365,7 @@ test('an action adds to the proficiency of its attribute and a higher proficienc
   const { a, act, left, stand } = setup();
   stand(a, FOREST);
   a.prof.chop = 400;
-  act('a', { t: 'gather', rounds: 1 });
+  act('a', { t: 'gather', item: 'wood', rounds: 1 });
   assert.equal(left('a'), 9);
 });
 
@@ -408,7 +409,7 @@ test('each tile in view shows its terrain, its site or building, its wild animal
 });
 
 // REQ-002 條件 8
-test('the tile of the character shows stock, structure, wild animal, ground items, and the players with their state', () => {
+test('the tile of the character shows resources, structure, wild animal, ground items, and the players with their state', () => {
   const { world, a, b, animals, act, state, stand, lay, grant, erect } = setup();
   stand(a, FOREST);
   stand(b, FOREST);
@@ -419,7 +420,10 @@ test('the tile of the character shows stock, structure, wild animal, ground item
   const here = state('a').here;
   assert.deepEqual(pos(here), pos(FOREST));
   assert.equal(here.terrain, 'forest');
-  assert.deepEqual(here.stock, { item: 'wood', amount: 100, max: 100 });
+  assert.deepEqual(here.resources, [
+    { item: 'wood', available: true },
+    { item: 'stone', available: true },
+  ]);
   assert.equal(here.animal, 'wolf');
   assert.equal(here.ground.stone?.qty, 4);
   assert.deepEqual(here.players, [
@@ -430,9 +434,60 @@ test('the tile of the character shows stock, structure, wild animal, ground item
   erect(SPAWN, 'workshop');
   grant(a, 'wood', 1);
   const home = state('a').here;
-  assert.equal(home.stock, null);
   assert.equal(home.structure?.type, 'workshop');
   assert.equal(home.players.length, 1);
+});
+
+// REQ-002 條件 5
+test('every tile that can be entered has wood and stone: much of what its terrain is rich in, little of the rest', () => {
+  const most = (where: Pos, item: 'wood' | 'stone') => {
+    const { a, act, state, stand } = setup();
+    stand(a, where);
+    act('a', { t: 'gather', item, rounds: 500 });
+    return state('a').me.action?.rounds;
+  };
+  assert.deepEqual([most(SPAWN, 'wood'), most(SPAWN, 'stone')], [10, 10]);
+  assert.deepEqual([most(FOREST, 'wood'), most(FOREST, 'stone')], [100, 10]);
+  assert.deepEqual([most(MOUNTAIN, 'wood'), most(MOUNTAIN, 'stone')], [10, 100]);
+  assert.deepEqual([most(RIVER, 'wood'), most(RIVER, 'stone')], [10, 10]);
+});
+
+test('gathering one resource leaves the other resource of the tile untouched', () => {
+  const { a, act, pass, state } = setup();
+  act('a', { t: 'gather', item: 'wood', rounds: 10 });
+  pass(100 * MINUTE);
+  assert.equal(countOf(a.inv, 'wood'), 10);
+  act('a', { t: 'gather', item: 'stone', rounds: 500 });
+  assert.equal(state('a').me.action?.rounds, 10);
+});
+
+// REQ-002 條件 8
+test('the tile shows whether each resource can be gathered now, and neither its stock nor its maximum', () => {
+  const { act, refuses, pass, state } = setup();
+  act('a', { t: 'gather', item: 'wood', rounds: 10 });
+  act('a', { t: 'speed', ap: 100 });
+  assert.deepEqual(state('a').here.resources, [
+    { item: 'wood', available: false },
+    { item: 'stone', available: true },
+  ]);
+  refuses('a', { t: 'gather', item: 'wood', rounds: 1 });
+  // A resource the terrain is not rich in regenerates one every two hours.
+  pass(119 * MINUTE);
+  assert.equal(state('a').here.resources[0].available, false);
+  pass(1 * MINUTE);
+  assert.equal(state('a').here.resources[0].available, true);
+});
+
+test('a tile stored by version 0.2.0 keeps the stock of the resource its terrain is rich in', () => {
+  const old = (p: Pos, stock: { amount: number; at: number } | null) =>
+    ({ ...p, stock, structure: null, ground: {}, killed: null }) as unknown as Tile;
+  const { a, act, state, stand } = setup([old(FOREST, { amount: 40, at: START }), old(SPAWN, null)]);
+  act('a', { t: 'gather', item: 'wood', rounds: 500 });
+  assert.equal(state('a').me.action?.rounds, 10);
+  act('a', { t: 'cancel' });
+  stand(a, FOREST);
+  act('a', { t: 'gather', item: 'wood', rounds: 500 });
+  assert.equal(state('a').me.action?.rounds, 40);
 });
 
 // --- REQ-004 建築 ---
@@ -656,11 +711,11 @@ test('holding a tool shortens the actions of its attribute', () => {
   const { a, act, left, grant, stand } = setup();
   stand(a, FOREST);
   grant(a, 'axe', 1);
-  act('a', { t: 'gather', rounds: 1 });
+  act('a', { t: 'gather', item: 'wood', rounds: 1 });
   assert.equal(left('a'), 8);
   act('a', { t: 'cancel' });
   stand(a, MOUNTAIN);
-  act('a', { t: 'gather', rounds: 1 });
+  act('a', { t: 'gather', item: 'stone', rounds: 1 });
   assert.equal(left('a'), 10);
 });
 
@@ -668,7 +723,7 @@ test('holding a tool shortens the actions of its attribute', () => {
 test('gathering on a mountain gives stone', () => {
   const { a, act, pass, stand } = setup();
   stand(a, MOUNTAIN);
-  act('a', { t: 'gather', rounds: 2 });
+  act('a', { t: 'gather', item: 'stone', rounds: 2 });
   pass(20 * MINUTE);
   assert.equal(countOf(a.inv, 'stone'), 2);
   assert.equal(a.prof.mine, 20);
@@ -686,7 +741,7 @@ test('eating makes the character fed, and an action started while fed takes 10% 
   assert.equal(countOf(a.inv, 'roastMeat'), 1);
   assert.equal(state('a').me.fedUntil, clock.now + 120 * MINUTE);
   assert.equal(state('a').me.action, null);
-  act('a', { t: 'gather', rounds: 1 });
+  act('a', { t: 'gather', item: 'wood', rounds: 1 });
   assert.equal(left('a'), 9);
 });
 
@@ -707,7 +762,7 @@ test('an action started after the fed time ran out takes the full time', () => {
   grant(a, 'rawMeat', 1);
   act('a', { t: 'eat', item: 'rawMeat' });
   pass(20 * MINUTE);
-  act('a', { t: 'gather', rounds: 1 });
+  act('a', { t: 'gather', item: 'wood', rounds: 1 });
   assert.equal(left('a'), 10);
 });
 
@@ -745,7 +800,7 @@ test('items can be put down and picked up during an action', () => {
   stand(a, FOREST);
   grant(a, 'stone', 2);
   lay(FOREST, 'hide', 1);
-  act('a', { t: 'gather', rounds: 1 });
+  act('a', { t: 'gather', item: 'wood', rounds: 1 });
   act('a', { t: 'drop', item: 'stone', qty: 2 });
   act('a', { t: 'pickup', item: 'hide', qty: 1 });
   assert.equal(countOf(a.inv, 'hide'), 1);

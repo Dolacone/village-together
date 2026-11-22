@@ -10,6 +10,7 @@ import {
   ITEM_IDS,
   MAX_ROUNDS,
   MINUTE,
+  RESOURCES,
   STEP_MINUTES,
   TERRAINS,
   VIEW_RADIUS,
@@ -339,22 +340,13 @@ function renderTile(s: State): void {
     );
   }
 
-  const resource = TERRAINS[here.terrain].resource;
-  if (resource && here.stock) {
-    const ms = actionMs(
-      resource.minutes,
-      skillMult(s.me.prof[resource.attr]),
-      toolMult(s.me.inv, resource.attr),
-      fedMult(s),
-    );
-    parts.push(
-      `<div class="row">${bar(`${ITEMS[resource.item].name}存量`, here.stock.amount, here.stock.max)}</div>` +
-        `<div class="row"><span class="grow">${resource.action}，每次 ${clock(ms)}</span>` +
-        roundButtons(Math.floor(here.stock.amount / resource.yield), (rounds) => ({ t: 'gather', rounds }), idle) +
-        '</div>',
-    );
-  } else {
-    parts.push('<div class="row muted">這一格沒有可採集的資源</div>');
+  parts.push('<h3>資源</h3>');
+  for (const { item, available } of here.resources) {
+    const resource = RESOURCES[item];
+    const ms = actionMs(resource.minutes, skillMult(s.me.prof[resource.attr]), toolMult(s.me.inv, resource.attr), fedMult(s));
+    const note = available ? `${resource.action}，每次 ${clock(ms)}` : '<span class="muted">現在沒有可採集的</span>';
+    const buttons = [1, 5, 20].map((rounds) => button(`x${rounds}`, { t: 'gather', item, rounds }, idle && available)).join('');
+    parts.push(`<div class="row"><span class="grow">${ITEMS[item].name}：${note}</span>${buttons}</div>`);
   }
 
   parts.push('<h3>建築</h3>');

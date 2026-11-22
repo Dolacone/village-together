@@ -159,9 +159,9 @@ test('a player sees another player act, arrive when the time is up, and go offli
 
 test('a rule violation is reported to the player who caused it', async () => {
   const eve = await enter('eve@example.com', 'Eve');
-  eve.send({ t: 'gather', rounds: 1 });
+  eve.send({ t: 'fight' });
   const err = await eve.next((m) => m.t === 'error');
-  assert.equal(err.t === 'error' && err.msg, '這一格沒有可採集的資源');
+  assert.equal(err.t === 'error' && err.msg, '這一格沒有野生動物');
   await eve.close();
 });
 

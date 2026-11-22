@@ -1,4 +1,4 @@
-import type { AnimalId, Attr, BuildingId, Inv, ItemId, Terrain } from './data.ts';
+import type { AnimalId, Attr, BuildingId, Inv, ItemId, ResourceId, Terrain } from './data.ts';
 
 export type Pos = { x: number; y: number };
 
@@ -17,11 +17,12 @@ export type Structure = {
 
 export type Stock = { amount: number; at: number };
 
-// Stored state of a tile. A tile without stored state has full stock and nothing on it.
+// Stored state of a tile. A tile without stored state has nothing on it.
 export type Tile = {
   x: number;
   y: number;
-  stock: Stock | null;
+  // A resource without an entry is at its maximum.
+  stocks: Partial<Record<ResourceId, Stock>>;
   structure: Structure | null;
   ground: Inv;
   // wildlife period in which the animal of the tile was defeated
@@ -35,7 +36,7 @@ type ActionBase = { t0: number; skip: number; floorAt: number; totalMs: number }
 export type Action = ActionBase &
   (
     | { kind: 'move'; path: Pos[]; ends: number[]; done: number }
-    | { kind: 'gather'; item: ItemId; attr: Attr; rounds: number; roundMs: number; minutes: number; yield: number }
+    | { kind: 'gather'; item: ResourceId; attr: Attr; rounds: number; roundMs: number; minutes: number; yield: number }
     | { kind: 'craft'; item: ItemId; rounds: number; roundMs: number; inputs: Inv }
     | { kind: 'build'; minutes: number; credited: number }
     | { kind: 'fight'; animal: AnimalId; period: number }
@@ -77,7 +78,8 @@ export type Here = {
   x: number;
   y: number;
   terrain: Terrain;
-  stock: { item: ItemId; amount: number; max: number } | null;
+  // The resources of the tile and whether one round of each can be gathered now.
+  resources: { item: ResourceId; available: boolean }[];
   structure: Structure | null;
   animal: AnimalId | null;
   ground: Inv;
@@ -106,7 +108,7 @@ export type ServerMsg =
 export type ClientMsg =
   | { t: 'create'; name: string }
   | { t: 'move'; x: number; y: number }
-  | { t: 'gather'; rounds: number }
+  | { t: 'gather'; item: ResourceId; rounds: number }
   | { t: 'craft'; item: ItemId; rounds: number }
   | { t: 'build'; minutes: number }
   | { t: 'fight' }

@@ -34,6 +34,7 @@ All numbers live in `shared/data.ts`.
 - A new character starts with full AP.
 - One step takes 10 minutes before multipliers.
 - One round of gathering takes 10 minutes and yields 1 item.
+- A tile holds 100 of the resource its terrain is rich in, regenerating 2 per hour, and 10 of each other resource, regenerating 1 every 2 hours.
 - Attribute level = floor(sqrt(proficiency / 100)). Each level shortens the action by 5%, down to 50%.
 - An action adds its base minutes to the proficiency of its attribute. A step adds 10.
 - Time multipliers from terrain, building, attribute, tool, and fed state multiply together. An action lasts at least 1 second.
@@ -76,6 +77,8 @@ All numbers live in `shared/data.ts`.
 ## Actions (REQ-003 條件 6-7, 11)
 
 - Gathering takes the rounds from the stock of the tile at its start. A stopped gathering returns the unfinished rounds to the stock.
+- A gathering asked for more rounds than the stock holds starts with the rounds the stock holds.
+- The state message carries no stock amount, only whether one round of each resource can be gathered.
 - Crafting holds its materials in the action. Held materials keep losing durability.
 - The round in progress when an action is stopped counts as unfinished.
 - A route is searched inside the 13x13 view of the character with `findPath`. The client uses the same function to show the travel time.
@@ -121,6 +124,7 @@ WebSocket /ws
 
 - `meta.schema` holds the version of the stored world. The server refuses a database of another version.
 - A world of version 0.1 cannot be loaded. `docker compose down -v` deletes it.
+- A tile stored by 0.2.0 holds a single stock. The server converts it when it loads the tile.
 
 ## Test coverage
 
@@ -128,12 +132,12 @@ WebSocket /ws
 |-------------|-----------|---------|
 | REQ-001 條件 1 shared world, sync | `tests/world.test.ts`, `tests/server.test.ts` | |
 | REQ-001 條件 2-3 pixel art, PC and mobile browser | | headless Chrome screenshots at 1200 px and 390 px width |
-| REQ-001 條件 4 docker | | not run for 0.2.0 |
+| REQ-001 條件 4 docker | | image built and started on the release host |
 | REQ-002 | `tests/mapgen.test.ts`, `tests/world.test.ts`, `tests/rules.test.ts` | map drawing: screenshots |
 | REQ-003 條件 1 Google login | identity taken from the header, connection without it closed | headless Chrome through a local proxy that sets the header |
 | REQ-003 條件 2-12 | `tests/world.test.ts`, `tests/rules.test.ts`, `tests/server.test.ts` | headless Chrome: move, stop button shown, speed up |
 | REQ-004 | `tests/world.test.ts`, `tests/rules.test.ts` | headless Chrome: put down a road site, build it |
-| REQ-005 | `tests/world.test.ts`, `tests/rules.test.ts` | headless Chrome: gather, put down, eat |
+| REQ-005 | `tests/world.test.ts`, `tests/rules.test.ts` | headless Chrome: gather wood and stone, put down, eat |
 | REQ-006 | `tests/server.test.ts` | |
 | REQ-007 | `tests/world.test.ts`, `tests/rules.test.ts` | headless Chrome: trapped, fight, drops |
 

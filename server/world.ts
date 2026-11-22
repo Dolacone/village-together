@@ -8,13 +8,15 @@ import {
   MAX_ROUNDS,
   MINUTE,
   FED_MULT,
+  RESOURCES,
+  RESOURCE_IDS,
   START_AP,
   STEP_MINUTES,
   STRUCTURE_LIFE_MS,
   TERRAINS,
   VIEW_RADIUS,
 } from '../shared/data.ts';
-import type { AnimalId, Attr, BuildingId, Inv, ItemId, Terrain } from '../shared/data.ts';
+import type { AnimalId, Attr, BuildingId, Inv, ItemId, ResourceId, Terrain } from '../shared/data.ts';
 import type {
   Action,
   ActionView,
@@ -22,6 +24,7 @@ import type {
   Here,
   Player,
   ServerMsg,
+  Stock,
   Structure,
   Tile,
   ViewTile,
@@ -41,6 +44,7 @@ import {
   settleInv,
   skillMult,
   stackDur,
+  stockDef,
   structureDur,
   takeItems,
   tintOf,
@@ -95,7 +99,16 @@ export class World {
 
   constructor(map: WorldMap, tiles: Tile[], players: Player[], store: Store, now: () => number, opts: WorldOptions = {}) {
     this.map = map;
-    for (const t of tiles) this.tiles.set(tileKey(t.x, t.y), t);
+    for (const t of tiles) {
+      // A tile stored by 0.2.0 holds one `stock`, of the resource its terrain is rich in.
+      const old = t as Tile & { stock?: Stock | null };
+      if (!t.stocks) {
+        const rich = TERRAINS[terrainOf(map, t.x, t.y) ?? 'grass'].rich;
+        t.stocks = rich && old.stock ? { [rich]: old.stock } : {};
+        delete old.stock;
+      }
+      this.tiles.set(tileKey(t.x, t.y), t);
+    }
     for (const p of players) this.players.set(p.id, p);
     this.store = store;
     this.now = now;
@@ -122,7 +135,7 @@ export class World {
         this.move(id, msg.x, msg.y);
         break;
       case 'gather':
-        this.gather(id, msg.rounds);
+        this.gather(id, msg.item, msg.rounds);
         break;
       case 'craft':
         this.craft(id, msg.item, msg.rounds);
@@ -190,13 +203,14 @@ export class World {
     this.start(p, { kind: 'move', t0: now, skip: 0, floorAt: now, totalMs: total, path: route.path, ends, done: 0 });
   }
 
-  private gather(id: string, rawRounds: number): void {
+  private gather(id: string, item: ResourceId, rawRounds: number): void {
     const { p, tile, now } = this.idle(id);
-    const resource = TERRAINS[this.terrain(tile)].resource;
-    if (!resource || !tile.stock) throw new GameError('這一格沒有可採集的資源');
-    const rounds = Math.min(posInt(rawRounds), MAX_ROUNDS, Math.floor(tile.stock.amount / resource.yield));
-    if (rounds <= 0) throw new GameError('這一格的資源存量不足');
-    tile.stock.amount -= rounds * resource.yield;
+    if (!RESOURCE_IDS.includes(item)) throw new GameError('沒有這種資源');
+    const resource = RESOURCES[item];
+    const stock = this.stockOf(tile, item, now);
+    const rounds = Math.min(posInt(rawRounds), MAX_ROUNDS, Math.floor(stock.amount / resource.yield));
+    if (rounds <= 0) throw new GameError(`這一格現在沒有${ITEMS[item].name}可以採集`);
+    tile.stocks[item] = { amount: stock.amount - rounds * resource.yield, at: stock.at };
     this.saveTile(tile);
     const roundMs = actionMs(
       resource.minutes,
@@ -210,7 +224,7 @@ export class World {
       skip: 0,
       floorAt: now,
       totalMs: roundMs * rounds,
-      item: resource.item,
+      item,
       attr: resource.attr,
       rounds,
       roundMs,
@@ -452,8 +466,9 @@ export class World {
     const left = a.rounds - rounds;
     if (a.kind === 'gather') {
       this.give(p, tile, a.item, rounds * a.yield, 1, now);
-      const resource = TERRAINS[this.terrain(tile)].resource;
-      if (tile.stock && resource) tile.stock.amount = Math.min(resource.max, tile.stock.amount + left * a.yield);
+      const stock = this.stockOf(tile, a.item, now);
+      const max = stockDef(this.terrain(tile), a.item)?.max ?? 0;
+      tile.stocks[a.item] = { amount: Math.min(max, stock.amount + left * a.yield), at: stock.at };
       p.prof[a.attr] += a.minutes * rounds;
     } else {
       const recipe = ITEMS[a.item].recipe!;
@@ -488,8 +503,7 @@ export class World {
     if (!tile) {
       const terrain = terrainOf(this.map, x, y);
       if (!terrain) throw new Error(`tile ${key} is outside the map`);
-      const resource = TERRAINS[terrain].resource;
-      tile = { x, y, stock: resource ? { amount: resource.max, at: 0 } : null, structure: null, ground: {}, killed: null };
+      tile = { x, y, stocks: {}, structure: null, ground: {}, killed: null };
       this.tiles.set(key, tile);
     }
     return tile;
@@ -526,7 +540,15 @@ export class World {
     return effect?.kind === 'preserve' ? effect.mult : 1;
   }
 
-  // Brings a tile to `now`: a worn-out building disappears, items on the ground lose durability, stock regenerates.
+  // The stock of a resource on a tile at `now`.
+  private stockOf(tile: Tile, item: ResourceId, now: number): Stock {
+    const def = stockDef(this.terrain(tile), item);
+    if (!def) return { amount: 0, at: now };
+    const stock = tile.stocks[item] ?? { amount: def.max, at: now };
+    return regenStock(stock.amount, stock.at, def.max, def.regenPerHour, now);
+  }
+
+  // Brings a tile to `now`: a worn-out building disappears and items on the ground lose durability.
   private refresh(tile: Tile, now: number): void {
     const s = tile.structure;
     if (s?.done && structureDur(s, now) <= 0) {
@@ -534,10 +556,6 @@ export class World {
       tile.structure = null;
     }
     settleInv(tile.ground, now, this.groundMult(tile));
-    const resource = TERRAINS[this.terrain(tile)].resource;
-    if (resource && tile.stock) {
-      tile.stock = regenStock(tile.stock.amount, tile.stock.at, resource.max, resource.regenPerHour, now);
-    }
   }
 
   // --- state for clients ---
@@ -591,12 +609,14 @@ export class World {
       }
     }
 
-    const resource = TERRAINS[this.terrain(tile)].resource;
     const here: Here = {
       x: tile.x,
       y: tile.y,
       terrain: this.terrain(tile),
-      stock: resource && tile.stock ? { item: resource.item, amount: tile.stock.amount, max: resource.max } : null,
+      resources: RESOURCE_IDS.map((item) => ({
+        item,
+        available: this.stockOf(tile, item, now).amount >= RESOURCES[item].yield,
+      })),
       structure: tile.structure,
       animal: this.animalAt(tile.x, tile.y, now)?.animal ?? null,
       ground: tile.ground,

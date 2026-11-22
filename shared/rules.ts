@@ -8,6 +8,8 @@ import {
   ITEM_IDS,
   ITEM_LIFE_MS,
   MINUTE,
+  STOCK_POOR,
+  STOCK_RICH,
   STRUCTURE_LIFE_MS,
   TERRAINS,
   TINT_RUINED,
@@ -15,7 +17,7 @@ import {
   WILDLIFE_DENSITY,
   WILDLIFE_PERIOD_MS,
 } from './data.ts';
-import type { AnimalId, Attr, BuildingId, Counts, Inv, ItemId, Stack, Terrain } from './data.ts';
+import type { AnimalId, Attr, BuildingId, Counts, Inv, ItemId, ResourceId, Stack, Terrain } from './data.ts';
 import type { Pos, Structure } from './protocol.ts';
 
 // AP at `now`, from the value `ap` reached at `apAt`. The character acts until `actingUntil` and is idle after it.
@@ -39,6 +41,13 @@ export function regenStock(
   if (gained <= 0) return { amount, at };
   const next = Math.min(max, amount + gained);
   return { amount: next, at: next === max ? now : at + gained * interval };
+}
+
+// Maximum and regeneration of a resource on a tile of this terrain, or null where nothing can be gathered.
+export function stockDef(terrain: Terrain, item: ResourceId): { max: number; regenPerHour: number } | null {
+  const def = TERRAINS[terrain];
+  if (!def.passable) return null;
+  return def.rich === item ? STOCK_RICH : STOCK_POOR;
 }
 
 export function levelOf(prof: number): number {

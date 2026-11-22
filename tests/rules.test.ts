@@ -15,6 +15,7 @@ import {
   settleInv,
   skillMult,
   stackDur,
+  stockDef,
   takeItems,
   tintOf,
   wildlifeAt,
@@ -42,6 +43,18 @@ test('resource stock regenerates over real time up to the maximum', () => {
   assert.deepEqual(regenStock(90, 0, 100, 2, 2 * HOUR), { amount: 94, at: 2 * HOUR });
   assert.equal(regenStock(90, 0, 100, 2, 100 * HOUR).amount, 100);
   assert.equal(regenStock(90, 0, 100, 2, 29 * MINUTE).amount, 90);
+});
+
+test('a resource has a high stock where the terrain is rich in it and a low stock on every other tile that can be entered', () => {
+  assert.deepEqual(stockDef('forest', 'wood'), { max: 100, regenPerHour: 2 });
+  assert.deepEqual(stockDef('forest', 'stone'), { max: 10, regenPerHour: 0.5 });
+  assert.deepEqual(stockDef('mountain', 'stone'), { max: 100, regenPerHour: 2 });
+  for (const terrain of ['grass', 'waste', 'river'] as const) {
+    assert.deepEqual(stockDef(terrain, 'wood'), { max: 10, regenPerHour: 0.5 });
+    assert.deepEqual(stockDef(terrain, 'stone'), { max: 10, regenPerHour: 0.5 });
+  }
+  assert.equal(stockDef('coast', 'wood'), null);
+  assert.equal(stockDef('peak', 'stone'), null);
 });
 
 // REQ-003 條件 12

@@ -60,16 +60,25 @@ export const ATTRS: Record<Attr, { name: string }> = {
   fight: { name: '戰鬥' },
 };
 
+// Items gathered from the stock of a tile.
+export type ResourceId = 'wood' | 'stone';
+
 export type ResourceDef = {
-  item: ItemId;
   action: string;
   attr: Attr;
-  max: number;
-  regenPerHour: number;
   // Minutes and yield of one round.
   minutes: number;
   yield: number;
 };
+
+export const RESOURCES: Record<ResourceId, ResourceDef> = {
+  wood: { action: '伐木', attr: 'chop', minutes: 10, yield: 1 },
+  stone: { action: '採石', attr: 'mine', minutes: 10, yield: 1 },
+};
+
+// Stock of a resource on a tile whose terrain is rich in it, and on every other tile that can be entered.
+export const STOCK_RICH = { max: 100, regenPerHour: 2 };
+export const STOCK_POOR = { max: 10, regenPerHour: 0.5 };
 
 export type TerrainDef = {
   name: string;
@@ -77,7 +86,8 @@ export type TerrainDef = {
   // Multipliers of the step time when a character enters or leaves the tile.
   enterMult: number;
   leaveMult: number;
-  resource?: ResourceDef;
+  // The resource the terrain is rich in.
+  rich?: ResourceId;
   // Wild animals of the terrain with their share. The shares add up to 1.
   animals: [AnimalId, number][];
 };
@@ -95,7 +105,7 @@ export const TERRAINS: Record<Terrain, TerrainDef> = {
     passable: true,
     enterMult: 1,
     leaveMult: 1.25,
-    resource: { item: 'wood', action: '伐木', attr: 'chop', max: 100, regenPerHour: 2, minutes: 10, yield: 1 },
+    rich: 'wood',
     animals: [['wolf', 0.6], ['spider', 0.3], ['bear', 0.1]],
   },
   waste: {
@@ -110,7 +120,7 @@ export const TERRAINS: Record<Terrain, TerrainDef> = {
     passable: true,
     enterMult: 1,
     leaveMult: 1,
-    resource: { item: 'stone', action: '採石', attr: 'mine', max: 100, regenPerHour: 2, minutes: 10, yield: 1 },
+    rich: 'stone',
     animals: [['goat', 0.6], ['wolf', 0.3], ['bear', 0.1]],
   },
   river: { name: '河流', passable: true, enterMult: 1.75, leaveMult: 1.75, animals: [] },
@@ -250,6 +260,7 @@ export const BUILDINGS: Record<BuildingId, BuildingDef> = {
 
 export const TERRAIN_IDS = Object.keys(TERRAINS) as Terrain[];
 export const ITEM_IDS = Object.keys(ITEMS) as ItemId[];
+export const RESOURCE_IDS = Object.keys(RESOURCES) as ResourceId[];
 export const BUILDING_IDS = Object.keys(BUILDINGS) as BuildingId[];
 export const ATTR_IDS = Object.keys(ATTRS) as Attr[];
 export const ANIMAL_IDS = Object.keys(ANIMALS) as AnimalId[];

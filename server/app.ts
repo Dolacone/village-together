@@ -10,6 +10,7 @@ import type { ClientMsg, ServerMsg } from '../shared/protocol.ts';
 import { Db } from './db.ts';
 import { generateMap } from './mapgen.ts';
 import { GameError, World, tileKey } from './world.ts';
+import type { Changes } from './world.ts';
 
 export type ServerOptions = {
   port: number;
@@ -36,6 +37,9 @@ export const IDENTITY_HEADER = 'x-auth-request-email';
 // WebSocket close code telling the client the request carried no identity.
 export const CLOSE_AUTH = 4401;
 const STATE_PUSH_MS = 60_000;
+const TICK_MS = 1000;
+// Version of the stored world. A database of another version is refused.
+const SCHEMA_VERSION = '2';
 const MAX_CHAT = 200;
 
 export async function startServer(opts: ServerOptions): Promise<RunningServer> {
@@ -43,11 +47,15 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
   const db = new Db(opts.dbPath);
 
   if (!db.getMeta('seed')) {
-    const seed = opts.seed ?? Math.floor(Math.random() * 2 ** 31);
-    db.saveTiles(generateMap(seed, now()));
-    db.setMeta('seed', String(seed));
+    db.setMeta('seed', String(opts.seed ?? Math.floor(Math.random() * 2 ** 31)));
+    db.setMeta('schema', SCHEMA_VERSION);
   }
-  const world = new World(db.loadTiles(), db.loadPlayers(), db, now);
+  if (db.getMeta('schema') !== SCHEMA_VERSION) {
+    db.close();
+    throw new Error(`${opts.dbPath} holds a world of another version. Delete it to start a new world.`);
+  }
+  const seed = Number(db.getMeta('seed'));
+  const world = new World(generateMap(seed), db.loadTiles(), db.loadPlayers(), db, now, { seed });
 
   const sockets = new Map<string, Set<WebSocket>>();
   const send = (ws: WebSocket, msg: ServerMsg) => ws.send(JSON.stringify(msg));
@@ -59,6 +67,8 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
       for (const ws of set) ws.send(state);
     }
   };
+
+  const pushChanges = (changes: Changes) => push([...changes.players, ...world.viewersOf(changes.tiles)]);
 
   const staticRoot = resolve(opts.staticDir);
   const serveStatic = async (pathname: string, res: ServerResponse) => {
@@ -144,14 +154,13 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
           for (const set of sockets.values()) for (const peer of set) peer.send(line);
           return;
         }
-        const affected = world.act(playerId, msg);
-        push([playerId, ...world.viewersOf(affected)]);
+        pushChanges(world.act(playerId, msg));
       } catch (err) {
         if (err instanceof GameError) send(ws, { t: 'error', msg: err.message });
         else if (err instanceof SyntaxError) send(ws, { t: 'error', msg: '訊息格式錯誤' });
         else {
           console.error('action failed', err);
-          send(ws, { t: 'error', msg: '伺服器處理動作時發生錯誤' });
+          send(ws, { t: 'error', msg: '伺服器處理行動時發生錯誤' });
         }
       }
     });
@@ -167,8 +176,11 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     });
   });
 
-  // Resource regeneration reaches clients through this periodic push.
-  const tick = setInterval(() => push(sockets.keys()), STATE_PUSH_MS);
+  // Resource regeneration, wild animals, and durability reach clients through this periodic push.
+  const refresh = setInterval(() => push(sockets.keys()), STATE_PUSH_MS);
+  refresh.unref();
+  // Actions in progress advance on this tick.
+  const tick = setInterval(() => pushChanges(world.tick()), TICK_MS);
   tick.unref();
 
   await new Promise<void>((done) => server.listen(opts.port, done));
@@ -178,6 +190,7 @@ export async function startServer(opts: ServerOptions): Promise<RunningServer> {
     world,
     close: async () => {
       clearInterval(tick);
+      clearInterval(refresh);
       for (const client of wss.clients) client.terminate();
       await new Promise<void>((done) => wss.close(() => done()));
       await new Promise<void>((done) => server.close(() => done()));

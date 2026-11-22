@@ -41,12 +41,6 @@ export class Db implements Store {
       .run(tileKey(tile.x, tile.y), JSON.stringify(tile));
   }
 
-  saveTiles(tiles: Tile[]): void {
-    this.db.exec('BEGIN');
-    for (const tile of tiles) this.saveTile(tile);
-    this.db.exec('COMMIT');
-  }
-
   savePlayer(player: Player): void {
     this.db
       .prepare('INSERT INTO players (id, data) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET data = excluded.data')

@@ -137,6 +137,7 @@ input:focus {
     grid-template-columns: 520px minmax(0, 1fr);
     grid-template-areas:
       'status status'
+      'action action'
       'map tile'
       'self tile'
       'chat chat';
@@ -145,6 +146,10 @@ input:focus {
 
   #status {
     grid-area: status;
+  }
+
+  #action-panel {
+    grid-area: action;
   }
 
   #map-panel {
@@ -193,34 +198,25 @@ input:focus {
   background: var(--edge);
 }
 
-#dpad {
-  display: grid;
-  grid-template-columns: repeat(3, 84px);
-  grid-template-areas:
-    '. n .'
-    'w c e'
-    '. s .';
-  gap: 4px;
+#map {
+  cursor: pointer;
+  box-sizing: content-box;
 }
 
-#dpad button {
-  line-height: 1.2;
-  padding: 4px;
-  min-height: 48px;
+#target {
+  width: 100%;
+  min-height: 46px;
 }
 
-#dpad small {
-  display: block;
-  color: var(--muted);
+/* action in progress */
+
+#action-panel .row {
+  margin-top: 0;
 }
 
-#dpad .center {
-  grid-area: c;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--muted);
-  font-size: 13px;
+#action-label {
+  flex: 0 1 auto;
+  font-weight: bold;
 }
 
 /* tile panel */
@@ -260,6 +256,10 @@ input:focus {
 
 .tag.done {
   background: var(--ok);
+}
+
+.tag.wild {
+  background: #e06c4f;
 }
 
 .bar {

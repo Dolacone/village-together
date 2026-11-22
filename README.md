@@ -18,6 +18,8 @@ The game listens on `127.0.0.1:8080`. Point the proxy at it.
 
 The world is stored in the `world` Docker volume. `docker compose down -v` deletes it.
 
+A world created by version 0.1 cannot be loaded by version 0.2. Delete the volume before starting 0.2.
+
 ## Develop
 
 Requires Node.js 24.
